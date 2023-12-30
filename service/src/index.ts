@@ -10,7 +10,7 @@ import { abortChatProcess, chatConfig, chatReplyProcess, containsSensitiveWords,
 import { auth, getUserId } from './middleware/auth'
 import { clearApiKeyCache, clearConfigCache, getApiKeys, getCacheApiKeys, getCacheConfig, getOriginConfig } from './storage/config'
 import type { AuditConfig, ChatInfo, ChatOptions, Config, KeyConfig, MailConfig, SiteConfig, UserConfig, UserInfo } from './storage/model'
-import { Status, UsageResponse, UserRole } from './storage/model'
+import { AdvancedConfig, Status, UsageResponse, UserRole } from './storage/model'
 import {
   clearChat,
   createChatRoom,
@@ -39,6 +39,7 @@ import {
   updateRoomUsingContext,
   updateUser,
   updateUser2FA,
+  updateUserAdvancedConfig,
   updateUserChatModel,
   updateUserInfo,
   updateUserPassword,
@@ -51,7 +52,7 @@ import { authLimiter, limiter } from './middleware/limiter'
 import { hasAnyRole, isEmail, isNotEmptyString } from './utils/is'
 import { sendNoticeMail, sendResetPasswordMail, sendTestMail, sendVerifyMail, sendVerifyMailAdmin } from './utils/mail'
 import { checkUserResetPassword, checkUserVerify, checkUserVerifyAdmin, getUserResetPasswordUrl, getUserVerifyUrl, getUserVerifyUrlAdmin, md5 } from './utils/security'
-import { rootAuth } from './middleware/rootAuth'
+import { isAdmin, rootAuth } from './middleware/rootAuth'
 
 dotenv.config()
 
@@ -553,9 +554,7 @@ router.post('/user-register', authLimiter, async (req, res) => {
 router.post('/config', rootAuth, async (req, res) => {
   try {
     const userId = req.headers.userId.toString()
-
-    const user = await getUserById(userId)
-    if (user == null || user.status !== Status.Normal || !user.roles.includes(UserRole.Admin))
+    if (!isAdmin(userId))
       throw new Error('无权限 | No permission.')
 
     const response = await chatConfig()
@@ -591,7 +590,7 @@ router.post('/session', async (req, res) => {
       }
     })
 
-    let userInfo: { name: string; description: string; avatar: string; userId: string; root: boolean; roles: UserRole[]; config: UserConfig }
+    let userInfo: { name: string; description: string; avatar: string; userId: string; root: boolean; roles: UserRole[]; config: UserConfig; advanced: AdvancedConfig }
     if (userId != null) {
       const user = await getUserById(userId)
       userInfo = {
@@ -602,6 +601,7 @@ router.post('/session', async (req, res) => {
         root: user.roles.includes(UserRole.Admin),
         roles: user.roles,
         config: user.config,
+        advanced: user.advanced,
       }
 
       const keys = (await getCacheApiKeys()).filter(d => hasAnyRole(d.userRoles, user.roles))
@@ -1069,6 +1069,55 @@ router.post('/audit-test', rootAuth, async (req, res) => {
   }
 })
 
+router.post('/setting-advanced', auth, async (req, res) => {
+  try {
+    const config = req.body as {
+      systemMessage: string
+      temperature: number
+      top_p: number
+      maxContextCount: number
+      sync: boolean
+    }
+    if (config.sync) {
+      if (!isAdmin(req.headers.userId as string)) {
+        res.send({ status: 'Fail', message: '无权限 | No permission', data: null })
+        return
+      }
+      const thisConfig = await getOriginConfig()
+      thisConfig.advancedConfig = new AdvancedConfig(
+        config.systemMessage,
+        config.temperature,
+        config.top_p,
+        config.maxContextCount,
+      )
+      await updateConfig(thisConfig)
+      clearConfigCache()
+    }
+    const userId = req.headers.userId.toString()
+    await updateUserAdvancedConfig(userId, new AdvancedConfig(
+      config.systemMessage,
+      config.temperature,
+      config.top_p,
+      config.maxContextCount,
+    ))
+    res.send({ status: 'Success', message: '操作成功 | Successfully' })
+  }
+  catch (error) {
+    res.send({ status: 'Fail', message: error.message, data: null })
+  }
+})
+
+router.post('/setting-reset-advanced', auth, async (req, res) => {
+  try {
+    const userId = req.headers.userId.toString()
+    await updateUserAdvancedConfig(userId, null)
+    res.send({ status: 'Success', message: '操作成功 | Successfully' })
+  }
+  catch (error) {
+    res.send({ status: 'Fail', message: error.message, data: null })
+  }
+})
+
 router.get('/setting-keys', rootAuth, async (req, res) => {
   try {
     const result = await getApiKeys()
@@ -1107,8 +1156,11 @@ router.post('/setting-key-upsert', rootAuth, async (req, res) => {
 
 router.post('/statistics/by-day', auth, async (req, res) => {
   try {
-    const userId = req.headers.userId
-    const { start, end } = req.body as { start: number; end: number }
+    let { userId, start, end } = req.body as { userId?: string; start: number; end: number }
+    if (!userId)
+      userId = req.headers.userId as string
+    else if (!isAdmin(req.headers.userId as string))
+      throw new Error('无权限 | No permission')
 
     const data = await getUserStatisticsByDay(new ObjectId(userId as string), start, end)
     res.send({ status: 'Success', message: '', data })

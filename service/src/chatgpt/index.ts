@@ -34,32 +34,37 @@ const ErrorCodeMessage: Record<string, string> = {
 let auditService: TextAuditService
 const _lockedKeys: { key: string; lockedTime: number }[] = []
 
-export async function initApi(key: KeyConfig, chatModel: string) {
+export async function initApi(key: KeyConfig, chatModel: string, maxContextCount: number) {
   // More Info: https://github.com/transitive-bullshit/chatgpt-api
 
   const config = await getCacheConfig()
   const model = chatModel as string
 
   if (key.keyModel === 'ChatGPTAPI') {
-    const OPENAI_API_BASE_URL = config.apiBaseUrl
+    const OPENAI_API_BASE_URL = isNotEmptyString(key.baseUrl) ? key.baseUrl : config.apiBaseUrl
 
+    let contextCount = 0
     const options: ChatGPTAPIOptions = {
       apiKey: key.key,
       completionParams: { model },
       debug: !config.apiDisableDebug,
       messageStore: undefined,
-      getMessageById,
+      getMessageById: async (id) => {
+        if (contextCount++ >= maxContextCount)
+          return null
+        return await getMessageById(id)
+      },
     }
 
     // Set the token limits based on the model's type. This is because different models have different token limits.
     // The token limit includes the token count from both the message array sent and the model response.
     // 'gpt-35-turbo' has a limit of 4096 tokens, 'gpt-4' and 'gpt-4-32k' have limits of 8192 and 32768 tokens respectively.
-		// Check if the model type is GPT-4-turbo
-		if (model.toLowerCase().includes('1106-preview')) {
-			//If it's a '1106-preview' model, set the maxModelTokens to 131072
-			options.maxModelTokens = 131072
-			options.maxResponseTokens = 32768
-		}
+    // Check if the model type is GPT-4-turbo
+    if (model.toLowerCase().includes('1106-preview')) {
+      // If it's a '1106-preview' model, set the maxModelTokens to 131072
+      options.maxModelTokens = 131072
+      options.maxResponseTokens = 32768
+    }
     // Check if the model type includes '16k'
     if (model.toLowerCase().includes('16k')) {
       // If it's a '16k' model, set the maxModelTokens to 16384 and maxResponseTokens to 4096
@@ -92,7 +97,11 @@ export async function initApi(key: KeyConfig, chatModel: string) {
   else {
     const options: ChatGPTUnofficialProxyAPIOptions = {
       accessToken: key.key,
-      apiReverseProxyUrl: isNotEmptyString(config.reverseProxy) ? config.reverseProxy : 'https://ai.fakeopen.com/api/conversation',
+      apiReverseProxyUrl: isNotEmptyString(key.baseUrl)
+        ? key.baseUrl
+        : isNotEmptyString(config.reverseProxy)
+          ? config.reverseProxy
+          : 'https://ai.fakeopen.com/api/conversation',
       model,
       debug: !config.apiDisableDebug,
     }
@@ -107,6 +116,7 @@ async function chatReplyProcess(options: RequestOptions) {
   const model = options.user.config.chatModel
   const key = await getRandomApiKey(options.user, options.user.config.chatModel, options.room.accountId)
   const userId = options.user._id.toString()
+  const maxContextCount = options.user.advanced.maxContextCount ?? 20
   const messageId = options.messageId
   if (key == null || key === undefined)
     throw new Error('没有可用的配置。请再试一次 | No available configuration. Please try again.')
@@ -140,7 +150,7 @@ async function chatReplyProcess(options: RequestOptions) {
       else
         options = { ...lastContext }
     }
-    const api = await initApi(key, model)
+    const api = await initApi(key, model, maxContextCount)
 
     const abort = new AbortController()
     options.abortSignal = abort.signal
