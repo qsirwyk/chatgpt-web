@@ -119,7 +119,7 @@ async function chatReplyProcess(options: RequestOptions) {
   const maxContextCount = options.user.advanced.maxContextCount ?? 20
   const messageId = options.messageId
   if (key == null || key === undefined)
-    throw new Error('没有可用的配置。请再试一次 | No available configuration. Please try again.')
+    throw new Error('没有对应的apikeys配置。请再试一次 | No available apikeys configuration. Please try again.')
 
   if (key.keyModel === 'ChatGPTUnofficialProxyAPI') {
     if (!options.room.accountId)
@@ -159,7 +159,6 @@ async function chatReplyProcess(options: RequestOptions) {
         process?.(partialResponse)
       },
     })
-
     return sendResponse({ type: 'Success', data: response })
   }
   catch (error: any) {
@@ -172,7 +171,7 @@ async function chatReplyProcess(options: RequestOptions) {
         return await chatReplyProcess(options)
       }
     }
-    global.console.error(error)
+    globalThis.console.error(error)
     if (Reflect.has(ErrorCodeMessage, code))
       return sendResponse({ type: 'Fail', message: ErrorCodeMessage[code] })
     return sendResponse({ type: 'Fail', message: error.message ?? 'Please check the back-end console' })
@@ -263,7 +262,7 @@ async function fetchBalance() {
   if (isNotEmptyString(config.socksProxy)) {
     socksAgent = new SocksProxyAgent({
       hostname: config.socksProxy.split(':')[0],
-      port: parseInt(config.socksProxy.split(':')[1]),
+      port: Number.parseInt(config.socksProxy.split(':')[1]),
       userId: isNotEmptyString(config.socksAuth) ? config.socksAuth.split(':')[0] : undefined,
       password: isNotEmptyString(config.socksAuth) ? config.socksAuth.split(':')[1] : undefined,
     })
@@ -303,7 +302,7 @@ async function fetchBalance() {
     return Promise.resolve(cachedBalance.toFixed(3))
   }
   catch (error) {
-    global.console.error(error)
+    globalThis.console.error(error)
     return Promise.resolve('-')
   }
 }
@@ -333,7 +332,7 @@ async function setupProxy(options: ChatGPTAPIOptions | ChatGPTUnofficialProxyAPI
   if (isNotEmptyString(config.socksProxy)) {
     const agent = new SocksProxyAgent({
       hostname: config.socksProxy.split(':')[0],
-      port: parseInt(config.socksProxy.split(':')[1]),
+      port: Number.parseInt(config.socksProxy.split(':')[1]),
       userId: isNotEmptyString(config.socksAuth) ? config.socksAuth.split(':')[0] : undefined,
       password: isNotEmptyString(config.socksAuth) ? config.socksAuth.split(':')[1] : undefined,
 

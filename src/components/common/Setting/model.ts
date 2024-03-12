@@ -29,6 +29,7 @@ export class SiteConfig {
   registerMails?: string
   siteDomain?: string
   chatModels?: string
+  usageCountLimit?: boolean
 }
 
 export class MailConfig {
@@ -126,6 +127,9 @@ export class UserInfo {
   password?: string
   roles: UserRole[]
   remark?: string
+  useAmount?: number
+  // 配合改造，增加额度信息 and it's switch
+  limit_switch?: boolean
   constructor(roles: UserRole[]) {
     this.roles = roles
   }

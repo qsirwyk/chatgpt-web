@@ -4,7 +4,8 @@ import * as dotenv from 'dotenv'
 import { ObjectId } from 'mongodb'
 import { textTokens } from 'gpt-token'
 import speakeasy from 'speakeasy'
-import { type RequestProps, TwoFAConfig } from './types'
+import { TwoFAConfig } from './types'
+import type { AuthJwtPayload, RequestProps } from './types'
 import type { ChatMessage } from './chatgpt'
 import { abortChatProcess, chatConfig, chatReplyProcess, containsSensitiveWords, initAuditService } from './chatgpt'
 import { auth, getUserId } from './middleware/auth'
@@ -20,6 +21,7 @@ import {
   deleteChatRoom,
   disableUser2FA,
   existsChatRoom,
+  getAmtByCardNo,
   getChat,
   getChatRoom,
   getChatRooms,
@@ -31,15 +33,18 @@ import {
   insertChat,
   insertChatUsage,
   renameChatRoom,
+  updateAmountMinusOne,
   updateApiKeyStatus,
   updateChat,
   updateConfig,
+  updateGiftCard,
   updateRoomChatModel,
   updateRoomPrompt,
   updateRoomUsingContext,
   updateUser,
   updateUser2FA,
   updateUserAdvancedConfig,
+  updateUserAmount,
   updateUserChatModel,
   updateUserInfo,
   updateUserPassword,
@@ -198,7 +203,7 @@ router.get('/chat-history', auth, async (req, res) => {
       res.send({ status: 'Success', message: null, data: [] })
       return
     }
-    const chats = await getChats(roomId, !isNotEmptyString(lastId) ? null : parseInt(lastId))
+    const chats = await getChats(roomId, !isNotEmptyString(lastId) ? null : Number.parseInt(lastId))
 
     const result = []
     chats.forEach((c) => {
@@ -367,19 +372,33 @@ router.post('/chat-process', [auth, limiter], async (req, res) => {
   res.setHeader('Content-type', 'application/octet-stream')
 
   let { roomId, uuid, regenerate, prompt, options = {}, systemMessage, temperature, top_p } = req.body as RequestProps
-  const userId = req.headers.userId as string
+  const userId = req.headers.userId.toString()
+  const config = await getCacheConfig()
   const room = await getChatRoom(userId, roomId)
   if (room == null)
-    global.console.error(`Unable to get chat room \t ${userId}\t ${roomId}`)
+    globalThis.console.error(`Unable to get chat room \t ${userId}\t ${roomId}`)
   if (room != null && isNotEmptyString(room.prompt))
     systemMessage = room.prompt
   let lastResponse
   let result
   let message: ChatInfo
+  let user = await getUserById(userId)
   try {
-    const config = await getCacheConfig()
-    const userId = req.headers.userId.toString()
-    const user = await getUserById(userId)
+    // If use the fixed fakeuserid(some probability of duplicated with real ones), redefine user which is send to chatReplyProcess
+    if (userId === '6406d8c50aedd633885fa16f') {
+      user = { _id: userId, roles: [UserRole.User], useAmount: 999, advanced: { maxContextCount: 999 }, limit_switch: false } as UserInfo
+    }
+    else {
+      // If global usage count limit is enabled, check can use amount before process chat.
+      if (config.siteConfig?.usageCountLimit) {
+        const useAmount = user ? (user.useAmount ?? 0) : 0
+        if (Number(useAmount) <= 0 && user.limit_switch) {
+          res.send({ status: 'Fail', message: '提问次数用完啦 | Question limit reached', data: null })
+          return
+        }
+      }
+    }
+
     if (config.auditConfig.enabled || config.auditConfig.customizeEnabled) {
       if (!user.roles.includes(UserRole.Admin) && await containsSensitiveWords(config.auditConfig, prompt)) {
         res.send({ status: 'Fail', message: '含有敏感词 | Contains sensitive words', data: null })
@@ -476,9 +495,15 @@ router.post('/chat-process', [auth, limiter], async (req, res) => {
           result.data.id,
           result.data.detail?.usage as UsageResponse)
       }
+      // update personal useAmount moved here
+      // if not fakeuserid, and has valid user info and valid useAmount set by admin nut null and limit is enabled
+      if (config.siteConfig?.usageCountLimit) {
+        if (userId !== '6406d8c50aedd633885fa16f' && user && user.useAmount && user.limit_switch)
+          await updateAmountMinusOne(userId)
+      }
     }
     catch (error) {
-      global.console.error(error)
+      globalThis.console.error(error)
     }
   }
 })
@@ -572,8 +597,9 @@ router.post('/config', rootAuth, async (req, res) => {
 router.post('/session', async (req, res) => {
   try {
     const config = await getCacheConfig()
-    const hasAuth = config.siteConfig.loginEnabled
-    const allowRegister = (await getCacheConfig()).siteConfig.registerEnabled
+    const hasAuth = config.siteConfig.loginEnabled || config.siteConfig.authProxyEnabled
+    const authProxyEnabled = config.siteConfig.authProxyEnabled
+    const allowRegister = config.siteConfig.registerEnabled
     if (config.apiModel !== 'ChatGPTAPI' && config.apiModel !== 'ChatGPTUnofficialProxyAPI')
       config.apiModel = 'ChatGPTAPI'
     const userId = await getUserId(req)
@@ -597,6 +623,23 @@ router.post('/session', async (req, res) => {
     let userInfo: { name: string; description: string; avatar: string; userId: string; root: boolean; roles: UserRole[]; config: UserConfig; advanced: AdvancedConfig }
     if (userId != null) {
       const user = await getUserById(userId)
+      if (user === null) {
+        globalThis.console.error(`session userId ${userId} but query user is null.`)
+        res.send({
+          status: 'Success',
+          message: '',
+          data: {
+            auth: hasAuth,
+            allowRegister,
+            model: config.apiModel,
+            title: config.siteConfig.siteTitle,
+            chatModels,
+            allChatModels: chatModelOptions,
+          },
+        })
+        return
+      }
+
       userInfo = {
         name: user.name,
         description: user.description,
@@ -633,6 +676,23 @@ router.post('/session', async (req, res) => {
           value: c.key,
         })
       })
+
+      res.send({
+        status: 'Success',
+        message: '',
+        data: {
+          auth: hasAuth,
+          authProxyEnabled,
+          allowRegister,
+          model: config.apiModel,
+          title: config.siteConfig.siteTitle,
+          chatModels,
+          allChatModels: chatModelOptions,
+          usageCountLimit: config.siteConfig?.usageCountLimit,
+          userInfo,
+        },
+      })
+      return
     }
 
     res.send({
@@ -640,10 +700,11 @@ router.post('/session', async (req, res) => {
       message: '',
       data: {
         auth: hasAuth,
+        authProxyEnabled,
         allowRegister,
         model: config.apiModel,
         title: config.siteConfig.siteTitle,
-        chatModels,
+        chatModels: chatModelOptions, // if userId is null which means in nologin mode, open all model options, otherwise user can only choose gpt-3.5-turbo
         allChatModels: chatModelOptions,
         userInfo,
       },
@@ -690,15 +751,19 @@ router.post('/user-login', authLimiter, async (req, res) => {
       name: user.name ? user.name : user.email,
       avatar: user.avatar,
       description: user.description,
-      userId: user._id,
+      userId: user._id.toString(),
       root: user.roles.includes(UserRole.Admin),
       config: user.config,
-    }, config.siteConfig.loginSalt.trim())
+    } as AuthJwtPayload, config.siteConfig.loginSalt.trim())
     res.send({ status: 'Success', message: '登录成功 | Login successfully', data: { token: jwtToken } })
   }
   catch (error) {
     res.send({ status: 'Fail', message: error.message, data: null })
   }
+})
+
+router.post('/user-logout', async (req, res) => {
+  res.send({ status: 'Success', message: '退出登录成功 | Logout successful', data: null })
 })
 
 router.post('/user-send-reset-mail', authLimiter, async (req, res) => {
@@ -754,6 +819,66 @@ router.post('/user-info', auth, async (req, res) => {
   }
 })
 
+// 使用兑换码后更新用户用量
+router.post('/user-updateamtinfo', auth, async (req, res) => {
+  try {
+    const { useAmount } = req.body as { useAmount: number }
+    const userId = req.headers.userId.toString()
+
+    const user = await getUserById(userId)
+    if (user == null || user.status !== Status.Normal)
+      throw new Error('用户不存在 | User does not exist.')
+    await updateUserAmount(userId, useAmount)
+    res.send({ status: 'Success', message: '更新用量成功 | Update Amount successfully' })
+  }
+  catch (error) {
+    res.send({ status: 'Fail', message: error.message, data: null })
+  }
+})
+
+// 获取用户对话额度
+router.get('/user-getamtinfo', auth, async (req, res) => {
+  try {
+    const userId = req.headers.userId as string
+    const user = await getUserById(userId)
+    const data = {
+      amount: user.useAmount,
+      limit: user.limit_switch,
+    }
+    res.send({ status: 'Success', message: null, data })
+  }
+  catch (error) {
+    console.error(error)
+    res.send({ status: 'Fail', message: 'Read Amount Error', data: 0 })
+  }
+})
+// 兑换对话额度
+router.post('/redeem-card', auth, async (req, res) => {
+  try {
+    const { redeemCardNo } = req.body as { redeemCardNo: string }
+    const userId = req.headers.userId.toString()
+    const user = await getUserById(userId)
+
+    if (user == null || user.status !== Status.Normal)
+      throw new Error('用户不存在 | User does not exist.')
+
+    const amt_isused = await getAmtByCardNo(redeemCardNo)
+    if (amt_isused) {
+      if (amt_isused.redeemed === 1)
+        throw new Error('该兑换码已被使用过 | RedeemCode been redeemed.')
+      await updateGiftCard(redeemCardNo, userId)
+      const data = amt_isused.amount
+      res.send({ status: 'Success', message: '兑换成功 | Redeem successfully', data })
+    }
+    else {
+      throw new Error('该兑换码无效，请检查是否输错 | RedeemCode not exist or Misspelled.')
+    }
+  }
+  catch (error) {
+    res.send({ status: 'Fail', message: error.message, data: null })
+  }
+})
+
 router.post('/user-chat-model', auth, async (req, res) => {
   try {
     const { chatModel } = req.body as { chatModel: string }
@@ -796,15 +921,16 @@ router.post('/user-status', rootAuth, async (req, res) => {
   }
 })
 
+// 函数中加入useAmount limit_switch
 router.post('/user-edit', rootAuth, async (req, res) => {
   try {
-    const { userId, email, password, roles, remark } = req.body as { userId?: string; email: string; password: string; roles: UserRole[]; remark?: string }
+    const { userId, email, password, roles, remark, useAmount, limit_switch } = req.body as { userId?: string; email: string; password: string; roles: UserRole[]; remark?: string; useAmount?: number; limit_switch?: boolean }
     if (userId) {
-      await updateUser(userId, roles, password, remark)
+      await updateUser(userId, roles, password, remark, Number(useAmount), limit_switch)
     }
     else {
       const newPassword = md5(password)
-      const user = await createUser(email, newPassword, roles, remark)
+      const user = await createUser(email, newPassword, roles, null, remark, Number(useAmount), limit_switch)
       await updateUserStatus(user._id.toString(), Status.Normal)
     }
     res.send({ status: 'Success', message: '更新成功 | Update successfully' })

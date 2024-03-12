@@ -6,7 +6,7 @@ import List from './List.vue'
 import Footer from './Footer.vue'
 import { useAppStore, useAuthStore, useChatStore } from '@/store'
 import { useBasicLayout } from '@/hooks/useBasicLayout'
-import { PromptStore } from '@/components/common'
+import { GithubSite, PromptStore } from '@/components/common'
 
 const appStore = useAppStore()
 const authStore = useAuthStore()
@@ -73,7 +73,7 @@ watch(
     <div class="flex flex-col h-full" :style="mobileSafeArea">
       <main class="flex flex-col flex-1 min-h-0">
         <div class="p-4">
-          <NButton dashed block :disabled="!!authStore.session?.auth && !authStore.token" @click="handleAdd">
+          <NButton dashed block :disabled="!!authStore.session?.auth && !authStore.token && !authStore.session?.authProxyEnabled" @click="handleAdd">
             {{ $t('chat.newChatButton') }}
           </NButton>
         </div>
@@ -87,6 +87,7 @@ watch(
         </div>
       </main>
       <Footer />
+      <GithubSite class="flex-col-2 text-center m-0" />
     </div>
   </NLayoutSider>
   <template v-if="isMobile">

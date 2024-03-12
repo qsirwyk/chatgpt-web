@@ -22,6 +22,19 @@ export enum UserRole {
   Tester = 7,
   Partner = 8,
 }
+// 新增一个兑换码的类
+export class GiftCard {
+  _id: ObjectId
+  cardno: string
+  amount: number
+  redeemed: number // boolean
+  redeemed_by: string
+  redeemed_date: string
+  constructor(amount: number, redeemed: number) {
+    this.amount = amount
+    this.redeemed = redeemed
+  }
+}
 
 export class UserInfo {
   _id: ObjectId
@@ -39,6 +52,8 @@ export class UserInfo {
   remark?: string
   secretKey?: string // 2fa
   advanced?: AdvancedConfig
+  useAmount?: number // chat usage amount
+  limit_switch?: boolean // chat amount limit switch
   constructor(email: string, password: string) {
     this.name = email
     this.email = email
@@ -49,6 +64,8 @@ export class UserInfo {
     this.updateTime = new Date().toLocaleString()
     this.roles = [UserRole.User]
     this.remark = null
+    this.useAmount = null
+    this.limit_switch = true
   }
 }
 
@@ -174,12 +191,14 @@ export class SiteConfig {
   constructor(
     public siteTitle?: string,
     public loginEnabled?: boolean,
+    public authProxyEnabled?: boolean,
     public loginSalt?: string,
     public registerEnabled?: boolean,
     public registerReview?: boolean,
     public registerMails?: string,
     public siteDomain?: string,
     public chatModels?: string,
+    public usageCountLimit?: boolean,
   ) { }
 }
 

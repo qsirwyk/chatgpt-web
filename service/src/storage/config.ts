@@ -27,7 +27,7 @@ export async function getOriginConfig() {
   let config = await getConfig()
   if (config == null) {
     config = new Config(new ObjectId(),
-      !isNaN(+process.env.TIMEOUT_MS) ? +process.env.TIMEOUT_MS : 600 * 1000,
+      !Number.isNaN(+process.env.TIMEOUT_MS) ? +process.env.TIMEOUT_MS : 600 * 1000,
       process.env.OPENAI_API_KEY,
       process.env.OPENAI_API_DISABLE_DEBUG === 'true',
       process.env.OPENAI_ACCESS_TOKEN,
@@ -42,15 +42,16 @@ export async function getOriginConfig() {
         : '',
       process.env.HTTPS_PROXY,
       new SiteConfig(
-        process.env.SITE_TITLE || 'ChatGpt Web',
+        process.env.SITE_TITLE || 'ChatGPT Web',
         isNotEmptyString(process.env.AUTH_SECRET_KEY),
+        process.env.AUTH_PROXY_ENABLED === 'true',
         process.env.AUTH_SECRET_KEY,
         process.env.REGISTER_ENABLED === 'true',
         process.env.REGISTER_REVIEW === 'true',
         process.env.REGISTER_MAILS,
         process.env.SITE_DOMAIN),
       new MailConfig(process.env.SMTP_HOST,
-        !isNaN(+process.env.SMTP_PORT) ? +process.env.SMTP_PORT : 465,
+        !Number.isNaN(+process.env.SMTP_PORT) ? +process.env.SMTP_PORT : 465,
         process.env.SMTP_TSL === 'true',
         process.env.SMTP_USERNAME,
         process.env.SMTP_PASSWORD))
@@ -58,6 +59,8 @@ export async function getOriginConfig() {
   else {
     if (config.siteConfig.loginEnabled === undefined)
       config.siteConfig.loginEnabled = isNotEmptyString(process.env.AUTH_SECRET_KEY)
+    if (config.siteConfig.authProxyEnabled === undefined)
+      config.siteConfig.authProxyEnabled = process.env.AUTH_PROXY_ENABLED === 'true'
     if (config.siteConfig.loginSalt === undefined)
       config.siteConfig.loginSalt = process.env.AUTH_SECRET_KEY
     if (config.apiDisableDebug === undefined)
@@ -177,3 +180,5 @@ export async function getApiKeys() {
   })
   return result
 }
+
+export const authProxyHeaderName = process.env.AUTH_PROXY_HEADER_NAME ?? 'X-Email'
