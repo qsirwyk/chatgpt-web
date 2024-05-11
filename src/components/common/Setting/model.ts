@@ -13,6 +13,7 @@ export class ConfigState {
   siteConfig?: SiteConfig
   mailConfig?: MailConfig
   auditConfig?: AuditConfig
+  announceConfig?: AnnounceConfig
 }
 
 export class UserConfig {
@@ -29,7 +30,9 @@ export class SiteConfig {
   registerMails?: string
   siteDomain?: string
   chatModels?: string
+  globalAmount?: number
   usageCountLimit?: boolean
+  showWatermark?: boolean
 }
 
 export class MailConfig {
@@ -38,6 +41,7 @@ export class MailConfig {
   smtpTsl?: boolean
   smtpUserName?: string
   smtpPassword?: string
+  smtpFrom?: string
 }
 export type TextAuditServiceProvider = 'baidu' //  | 'ali'
 
@@ -60,6 +64,11 @@ export class AuditConfig {
   textType?: TextAudioType
   customizeEnabled?: boolean
   sensitiveWords?: string
+}
+
+export class AnnounceConfig {
+  enabled?: boolean
+  announceWords?: string
 }
 
 export enum Status {
@@ -154,4 +163,10 @@ export class TwoFAConfig {
     this.otpauthUrl = ''
     this.testCode = ''
   }
+}
+
+export interface GiftCard {
+  cardno: string
+  amount: number
+  redeemed: number
 }

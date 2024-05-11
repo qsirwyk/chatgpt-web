@@ -2,6 +2,7 @@ import express from 'express'
 import jwt from 'jsonwebtoken'
 import * as dotenv from 'dotenv'
 import { ObjectId } from 'mongodb'
+import type { TiktokenModel } from 'gpt-token'
 import { textTokens } from 'gpt-token'
 import speakeasy from 'speakeasy'
 import { TwoFAConfig } from './types'
@@ -10,7 +11,7 @@ import type { ChatMessage } from './chatgpt'
 import { abortChatProcess, chatConfig, chatReplyProcess, containsSensitiveWords, initAuditService } from './chatgpt'
 import { auth, getUserId } from './middleware/auth'
 import { clearApiKeyCache, clearConfigCache, getApiKeys, getCacheApiKeys, getCacheConfig, getOriginConfig } from './storage/config'
-import type { AuditConfig, ChatInfo, ChatOptions, Config, KeyConfig, MailConfig, SiteConfig, UserConfig, UserInfo } from './storage/model'
+import type { AnnounceConfig, AuditConfig, ChatInfo, ChatOptions, Config, GiftCard, KeyConfig, MailConfig, SiteConfig, UserConfig, UserInfo } from './storage/model'
 import { AdvancedConfig, Status, UsageResponse, UserRole } from './storage/model'
 import {
   clearChat,
@@ -38,6 +39,7 @@ import {
   updateChat,
   updateConfig,
   updateGiftCard,
+  updateGiftCards,
   updateRoomChatModel,
   updateRoomPrompt,
   updateRoomUsingContext,
@@ -58,6 +60,7 @@ import { hasAnyRole, isEmail, isNotEmptyString } from './utils/is'
 import { sendNoticeMail, sendResetPasswordMail, sendTestMail, sendVerifyMail, sendVerifyMailAdmin } from './utils/mail'
 import { checkUserResetPassword, checkUserVerify, checkUserVerifyAdmin, getUserResetPasswordUrl, getUserVerifyUrl, getUserVerifyUrlAdmin, md5 } from './utils/security'
 import { isAdmin, rootAuth } from './middleware/rootAuth'
+import { router as uploadRouter } from './routes/upload'
 
 dotenv.config()
 
@@ -66,6 +69,8 @@ const router = express.Router()
 
 app.use(express.static('public'))
 app.use(express.json())
+
+app.use('/uploads', express.static('uploads'))
 
 app.all('*', (_, res, next) => {
   res.header('Access-Control-Allow-Origin', '*')
@@ -212,6 +217,7 @@ router.get('/chat-history', auth, async (req, res) => {
           uuid: c.uuid,
           dateTime: new Date(c.dateTime).toLocaleString(),
           text: c.prompt,
+          images: c.images,
           inversion: true,
           error: false,
           conversationOptions: null,
@@ -371,7 +377,7 @@ router.post('/chat-clear', auth, async (req, res) => {
 router.post('/chat-process', [auth, limiter], async (req, res) => {
   res.setHeader('Content-type', 'application/octet-stream')
 
-  let { roomId, uuid, regenerate, prompt, options = {}, systemMessage, temperature, top_p } = req.body as RequestProps
+  let { roomId, uuid, regenerate, prompt, uploadFileKeys, options = {}, systemMessage, temperature, top_p } = req.body as RequestProps
   const userId = req.headers.userId.toString()
   const config = await getCacheConfig()
   const room = await getChatRoom(userId, roomId)
@@ -379,6 +385,8 @@ router.post('/chat-process', [auth, limiter], async (req, res) => {
     globalThis.console.error(`Unable to get chat room \t ${userId}\t ${roomId}`)
   if (room != null && isNotEmptyString(room.prompt))
     systemMessage = room.prompt
+  const model = room.chatModel
+
   let lastResponse
   let result
   let message: ChatInfo
@@ -408,10 +416,11 @@ router.post('/chat-process', [auth, limiter], async (req, res) => {
 
     message = regenerate
       ? await getChat(roomId, uuid)
-      : await insertChat(uuid, prompt, roomId, options as ChatOptions)
+      : await insertChat(uuid, prompt, uploadFileKeys, roomId, options as ChatOptions)
     let firstChunk = true
     result = await chatReplyProcess({
       message: prompt,
+      uploadFileKeys,
       lastContext: options,
       process: (chat: ChatMessage) => {
         lastResponse = chat
@@ -446,9 +455,9 @@ router.post('/chat-process', [auth, limiter], async (req, res) => {
       if (!result.data.detail)
         result.data.detail = {}
       result.data.detail.usage = new UsageResponse()
-      // 因为 token 本身不计算, 所以这里默认以 gpt 3.5 的算做一个伪统计
-      result.data.detail.usage.prompt_tokens = textTokens(prompt, 'gpt-3.5-turbo')
-      result.data.detail.usage.completion_tokens = textTokens(result.data.text, 'gpt-3.5-turbo')
+      // if no usage data, calculate using Tiktoken library
+      result.data.detail.usage.prompt_tokens = textTokens(prompt, model as TiktokenModel)
+      result.data.detail.usage.completion_tokens = textTokens(result.data.text, model as TiktokenModel)
       result.data.detail.usage.total_tokens = result.data.detail.usage.prompt_tokens + result.data.detail.usage.completion_tokens
       result.data.detail.usage.estimated = true
     }
@@ -493,6 +502,7 @@ router.post('/chat-process', [auth, limiter], async (req, res) => {
           roomId,
           message._id,
           result.data.id,
+          model,
           result.data.detail?.usage as UsageResponse)
       }
       // update personal useAmount moved here
@@ -635,6 +645,7 @@ router.post('/session', async (req, res) => {
             title: config.siteConfig.siteTitle,
             chatModels,
             allChatModels: chatModelOptions,
+            showWatermark: config.siteConfig?.showWatermark,
           },
         })
         return
@@ -689,6 +700,7 @@ router.post('/session', async (req, res) => {
           chatModels,
           allChatModels: chatModelOptions,
           usageCountLimit: config.siteConfig?.usageCountLimit,
+          showWatermark: config.siteConfig?.showWatermark,
           userInfo,
         },
       })
@@ -706,6 +718,7 @@ router.post('/session', async (req, res) => {
         title: config.siteConfig.siteTitle,
         chatModels: chatModelOptions, // if userId is null which means in nologin mode, open all model options, otherwise user can only choose gpt-3.5-turbo
         allChatModels: chatModelOptions,
+        showWatermark: config.siteConfig?.showWatermark,
         userInfo,
       },
     })
@@ -873,6 +886,18 @@ router.post('/redeem-card', auth, async (req, res) => {
     else {
       throw new Error('该兑换码无效，请检查是否输错 | RedeemCode not exist or Misspelled.')
     }
+  }
+  catch (error) {
+    res.send({ status: 'Fail', message: error.message, data: null })
+  }
+})
+
+// update giftcard database
+router.post('/giftcard-update', rootAuth, async (req, res) => {
+  try {
+    const { data, overRideSwitch } = req.body as { data: GiftCard[];overRideSwitch: boolean }
+    await updateGiftCards(data, overRideSwitch)
+    res.send({ status: 'Success', message: '更新成功 | Update successfully' })
   }
   catch (error) {
     res.send({ status: 'Fail', message: error.message, data: null })
@@ -1166,6 +1191,30 @@ router.post('/mail-test', rootAuth, async (req, res) => {
   }
 })
 
+router.post('/setting-announce', rootAuth, async (req, res) => {
+  try {
+    const config = req.body as AnnounceConfig
+    const thisConfig = await getOriginConfig()
+    thisConfig.announceConfig = config
+    const result = await updateConfig(thisConfig)
+    clearConfigCache()
+    res.send({ status: 'Success', message: '操作成功 | Successfully', data: result.announceConfig })
+  }
+  catch (error) {
+    res.send({ status: 'Fail', message: error.message, data: null })
+  }
+})
+
+router.post('/announcement', async (req, res) => {
+  try {
+    const result = await getCacheConfig()
+    res.send({ status: 'Success', message: '操作成功 | Successfully', data: result.announceConfig })
+  }
+  catch (error) {
+    res.send({ status: 'Fail', message: error.message, data: null })
+  }
+})
+
 router.post('/setting-audit', rootAuth, async (req, res) => {
   try {
     const config = req.body as AuditConfig
@@ -1299,6 +1348,9 @@ router.post('/statistics/by-day', auth, async (req, res) => {
     res.send(error)
   }
 })
+
+app.use('', uploadRouter)
+app.use('/api', uploadRouter)
 
 app.use('', router)
 app.use('/api', router)

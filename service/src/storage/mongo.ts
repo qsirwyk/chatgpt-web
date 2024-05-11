@@ -67,8 +67,19 @@ export async function updateAmountMinusOne(userId: string) {
   return result.modifiedCount > 0
 }
 
-export async function insertChat(uuid: number, text: string, roomId: number, options?: ChatOptions) {
-  const chatInfo = new ChatInfo(roomId, uuid, text, options)
+// update giftcards database
+export async function updateGiftCards(data: GiftCard[], overRide = true) {
+  if (overRide) {
+    // i am not sure is there a drop option for the node driver reference https://mongodb.github.io/node-mongodb-native/6.4/
+    // await redeemCol.deleteMany({})
+    await redeemCol.drop()
+  }
+  const insertResult = await redeemCol.insertMany(data)
+  return insertResult
+}
+
+export async function insertChat(uuid: number, text: string, images: string[], roomId: number, options?: ChatOptions) {
+  const chatInfo = new ChatInfo(roomId, uuid, text, images, options)
   await chatCol.insertOne(chatInfo)
   return chatInfo
 }
@@ -96,14 +107,19 @@ export async function updateChat(chatId: string, response: string, messageId: st
   }
 
   if (previousResponse)
-    // @ts-expect-error previousResponse
+    // @ts-expect-error https://jira.mongodb.org/browse/NODE-5214
     update.$set.previousResponse = previousResponse
 
   await chatCol.updateOne(query, update)
 }
 
-export async function insertChatUsage(userId: ObjectId, roomId: number, chatId: ObjectId, messageId: string, usage: UsageResponse) {
-  const chatUsage = new ChatUsage(userId, roomId, chatId, messageId, usage)
+export async function insertChatUsage(userId: ObjectId,
+  roomId: number,
+  chatId: ObjectId,
+  messageId: string,
+  model: string,
+  usage: UsageResponse) {
+  const chatUsage = new ChatUsage(userId, roomId, chatId, messageId, model, usage)
   await usageCol.insertOne(chatUsage)
   return chatUsage
 }
@@ -197,7 +213,7 @@ export async function deleteAllChatRooms(userId: string) {
   await chatCol.updateMany({ userId, status: Status.Normal }, { $set: { status: Status.Deleted } })
 }
 
-export async function getChats(roomId: number, lastId?: number) {
+export async function getChats(roomId: number, lastId?: number): Promise<ChatInfo[]> {
   if (!lastId)
     lastId = new Date().getTime()
   const query = { roomId, uuid: { $lt: lastId }, status: { $ne: Status.Deleted } }
@@ -251,15 +267,21 @@ export async function deleteChat(roomId: number, uuid: number, inversion: boolea
 export async function createUser(email: string, password: string, roles?: UserRole[], status?: Status, remark?: string, useAmount?: number, limit_switch?: boolean): Promise<UserInfo> {
   email = email.toLowerCase()
   const userInfo = new UserInfo(email, password)
+  const config = await getCacheConfig()
+
   if (roles && roles.includes(UserRole.Admin))
     userInfo.status = Status.Normal
-  if (status !== null)
+  if (status)
     userInfo.status = status
 
   userInfo.roles = roles
   userInfo.remark = remark
-  userInfo.useAmount = useAmount
-  userInfo.limit_switch = limit_switch
+  if (limit_switch != null)
+    userInfo.limit_switch = limit_switch
+  if (useAmount != null)
+    userInfo.useAmount = useAmount
+  else
+    userInfo.useAmount = config?.siteConfig?.globalAmount ?? 10
   await userCol.insertOne(userInfo)
   return userInfo
 }

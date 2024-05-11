@@ -2,7 +2,7 @@ import { ObjectId } from 'mongodb'
 import * as dotenv from 'dotenv'
 import type { TextAuditServiceProvider } from 'src/utils/textAudit'
 import { isNotEmptyString, isTextAuditServiceProvider } from '../utils/is'
-import { AdvancedConfig, AuditConfig, Config, KeyConfig, MailConfig, SiteConfig, TextAudioType, UserRole } from './model'
+import { AdvancedConfig, AnnounceConfig, AuditConfig, Config, KeyConfig, MailConfig, SiteConfig, TextAudioType, UserRole } from './model'
 import { getConfig, getKeys, upsertKey } from './mongo'
 
 dotenv.config()
@@ -54,7 +54,10 @@ export async function getOriginConfig() {
         !Number.isNaN(+process.env.SMTP_PORT) ? +process.env.SMTP_PORT : 465,
         process.env.SMTP_TSL === 'true',
         process.env.SMTP_USERNAME,
-        process.env.SMTP_PASSWORD))
+        process.env.SMTP_PASSWORD,
+        process.env.SMTP_FROM || process.env.SMTP_USERNAME,
+      ),
+    )
   }
   else {
     if (config.siteConfig.loginEnabled === undefined)
@@ -99,15 +102,22 @@ export async function getOriginConfig() {
 
   if (!config.advancedConfig) {
     config.advancedConfig = new AdvancedConfig(
-      'You are ChatGPT, a large language model trained by OpenAI. Follow the user\'s instructions carefully.Respond using markdown.',
+      'You are ChatGPT, a large language model trained by OpenAI. Follow the user\'s instructions carefully.Respond using markdown (latex start with $).',
       0.8,
       1,
       20,
     )
   }
 
+  if (!config.announceConfig) {
+    config.announceConfig = new AnnounceConfig(
+      false,
+      '',
+    )
+  }
+
   if (!isNotEmptyString(config.siteConfig.chatModels))
-    config.siteConfig.chatModels = 'gpt-3.5-turbo,gpt-3.5-turbo-1106,gpt-3.5-turbo-16k,gpt-3.5-turbo-16k-0613,gpt-4,gpt-4-0613,gpt-4-32k,gpt-4-32k-0613,text-davinci-002-render-sha-mobile,text-embedding-ada-002,gpt-4-mobile,gpt-4-browsing,gpt-4-1106-preview,gpt-4-vision-preview'
+    config.siteConfig.chatModels = 'gpt-3.5-turbo,gpt-4-turbo-preview,gpt-4-vision-preview'
 
   return config
 }
